@@ -1,0 +1,23 @@
+# Never commit the external RiskBench archives or extracted dataset.
+/artifacts/
+/data/
+/logs/
+/results/
+/tmp/
+*.zip
+*.tar
+*.tar.gz
+*.pt
+*.pth
+*.ckpt
+*.mp4
+*.avi
+*.gif
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# The managed workspace exposes a read-only .git directory. The writable
+# project repository metadata is kept separately until the workspace is handed
+# off to a normal checkout.
+.git-repro/
