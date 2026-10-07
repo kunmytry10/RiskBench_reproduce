@@ -200,6 +200,30 @@ contract check, not a paper reproduction result.
   exploratory constant-velocity adapter until the upstream rectangle-collision
   implementation is ported.
 
+## Official-rule offline port checkpoint (2026-10-07)
+
+- The first full-prefix run was stopped because it used the earlier local
+  smoke adapter and was not a valid paper reproduction.
+- `scripts/official_offline_baselines.py` now reconstructs the archived
+  per-frame inputs and applies the official Random/Range rules. Its Kalman
+  path calls the upstream `models/KalmanFilter.py::kf_inference` directly,
+  including the official 20-frame history, 30-frame forecast, and rectangle
+  collision logic.
+- `scripts/run_official_offline_test_split.py` provides resumable,
+  multi-process batch execution. It writes the same per-method/data-type JSON
+  contract consumed by `ROI_tool.py`.
+- A four-scene smoke batch completed 12 official-rule jobs with zero errors.
+  Range matched the available author prediction JSON frame-by-frame on the
+  interactive and collision representatives. Kalman matched the interactive
+  and obstacle representatives; collision differed on four frames and is
+  being tracked as a parity issue. Random is stochastic, so exact selected IDs
+  are not expected to match without the original CARLA random state.
+- The parity report is saved at
+  `artifacts/official_offline_parity/validation_report.json`. Partial smoke
+  outputs must not be passed to the evaluator as final metrics: the official
+  evaluator evaluates the metadata universe, so missing scenes are counted as
+  negative predictions.
+
 Smoke command:
 
 ```bash
