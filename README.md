@@ -161,6 +161,11 @@ conda run -n riskbench python scripts/make_report_assets.py \
   --output-dir artifacts/visualization
 ```
 
+For the representative obstacle scene, use the corrected obstacle outputs
+instead: replace both `--score-root` and `--roi-root` with
+`artifacts/obstacle_fix/roi`. The interactive and collision figures use
+`artifacts/risk_type_scenes/roi`.
+
 Key scene outputs are under `artifacts/visualization/scenes/`; the other
 report outputs are `dataset_split_counts.png` and
 `official_prediction_reference_interactive_f1.png`. The matching scene
