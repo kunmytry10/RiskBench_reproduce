@@ -177,6 +177,9 @@ The obstacle figure uses the official instance-segmentation/geometry path.
 - `scripts/run_official_offline_test_split.py` provides resumable,
   multi-process batch execution. It writes the same per-method/data-type JSON
   contract consumed by `ROI_tool.py`.
+- Kalman workers reset the upstream class-level OpenCV filter state at the
+  start of every scenario, matching the official one-process-per-scenario
+  CARLA runner and preventing cross-scenario state leakage.
 - A four-scene smoke batch completed 12 official-rule jobs with zero errors.
   Range matched the available author prediction JSON frame-by-frame on the
   interactive and collision representatives. Kalman matched the interactive
