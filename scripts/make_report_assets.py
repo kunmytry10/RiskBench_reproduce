@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 import numpy as np
+from PIL import Image
 
 
 DATA_TYPES = ["interactive", "collision", "obstacle", "non-interactive"]
@@ -78,6 +79,10 @@ def actor_xy(state):
     return float(location["x"]), float(location["y"])
 
 
+def distance(a, b):
+    return float(np.hypot(a[0] - b[0], a[1] - b[1]))
+
+
 def actor_states(variant_path):
     return {
         frame: load_json(path)
@@ -97,6 +102,58 @@ def raw_state_by_normalized_id(states, instance_id):
         if norm_id(raw_id) == instance_id:
             return state
     return None
+
+
+def obstacle_segmentation_boxes(variant_path, frame):
+    """Mirror the official get_ids() obstacle branch.
+
+    RiskBench raw instance segmentation stores the semantic class in channel
+    0 and the instance ID in channels 1/2. Official code uses class 21 for
+    static obstacles and computes a box from each instance mask.
+    """
+    path = os.path.join(
+        variant_path, "instance_segmentation", "front", "%08d.png" % frame
+    )
+    if not os.path.exists(path):
+        return {}
+    image = np.asarray(Image.open(path))
+    if image.ndim != 3 or image.shape[2] < 3:
+        return {}
+    semantic = image[:, :, 0].astype(np.int64)
+    instance = image[:, :, 1].astype(np.int64) + 256 * image[:, :, 2].astype(np.int64)
+    boxes = {}
+    for raw_instance in np.unique(instance[semantic == 21]):
+        ys, xs = np.where((semantic == 21) & (instance == raw_instance))
+        if len(xs) == 0:
+            continue
+        boxes[str(int(raw_instance) % 65536)] = [
+            int(xs.min()),
+            int(ys.min()),
+            int(xs.max()),
+            int(ys.max()),
+        ]
+    return boxes
+
+
+def obstacle_geometry(attrs):
+    geometry = {}
+    for raw_id, info in attrs.get("obstacle", {}).items():
+        instance_id = norm_id(raw_id)
+        corners = info.get("cord_bounding_box", {})
+        try:
+            # Same four ground-plane corners selected by the official BEV
+            # visualizer: cord_0, cord_4, cord_6, cord_2.
+            points = [
+                (float(corners["cord_%d" % i][0]), float(corners["cord_%d" % i][1]))
+                for i in (0, 4, 6, 2, 0)
+            ]
+        except (KeyError, TypeError, ValueError):
+            continue
+        geometry[instance_id] = {
+            "points": points,
+            "type_id": info.get("type_id", "obstacle"),
+        }
+    return geometry
 
 
 def load_scores(score_root, method, data_type, scene_key):
@@ -131,6 +188,7 @@ def plot_scene(args):
     bbox = load_json(os.path.join(variant_path, "bbox.json"))
     attrs = load_json(os.path.join(variant_path, "actor_attribute.json"))
     ego_id = norm_id(attrs["ego_id"])
+    obstacle_shapes = obstacle_geometry(attrs)
     gt_risk = locate_metadata(args.metadata_root, "GT_risk", args.data_type).get(scene_key, [])
     gt_ids = set(norm_id(item) for item in gt_risk)
     critical = locate_metadata(args.metadata_root, "GT_critical_point", args.data_type).get(scene_key)
@@ -177,7 +235,10 @@ def plot_scene(args):
         % (scene_key, critical, ", ".join(sorted(gt_ids)) or "none"),
         fontsize=10,
     )
-    frame_boxes = bbox[str(critical).zfill(8)]
+    frame_boxes = dict(bbox[str(critical).zfill(8)])
+    if args.data_type == "obstacle":
+        for instance_id, box in obstacle_segmentation_boxes(variant_path, critical).items():
+            frame_boxes.setdefault(instance_id, box)
     frame_box_ids = {
         norm_id(raw_id) for raw_id in frame_boxes if is_actor_id(raw_id)
     }
@@ -195,6 +256,10 @@ def plot_scene(args):
             edge = "#d62728"
             linewidth = 3.0
             label = "GT"
+        elif args.data_type == "obstacle" and instance_id in obstacle_shapes:
+            edge = "#ff8c00"
+            linewidth = 2.0
+            label = "obstacle"
         else:
             edge = "#bdbdbd"
             linewidth = 1.0
@@ -260,6 +325,35 @@ def plot_scene(args):
             ax_bev.scatter(xs[-1], ys[-1], color="#d62728", s=20)
         else:
             ax_bev.plot(xs, ys, color="#bdbdbd", linewidth=0.7, alpha=0.6)
+    if args.data_type == "obstacle":
+        critical_ego = actor_xy(egos[critical])
+        active_obstacles = {
+            norm_id(raw_id)
+            for raw_id, state in actors[critical].items()
+            if is_actor_id(raw_id)
+            and isinstance(state, dict)
+            and state.get("type") == "obstacle"
+        }
+        for instance_id, shape in obstacle_shapes.items():
+            if instance_id not in active_obstacles and instance_id not in gt_ids:
+                continue
+            points = shape["points"]
+            xs = [point[0] for point in points]
+            ys = [point[1] for point in points]
+            center = (
+                sum(point[0] for point in points[:-1]) / 4.0,
+                sum(point[1] for point in points[:-1]) / 4.0,
+            )
+            near_ego = distance(center, critical_ego) <= 60.0
+            if instance_id not in gt_ids and not near_ego:
+                continue
+            if instance_id in gt_ids:
+                color, width, alpha = "#d62728", 2.5, 0.95
+            else:
+                color, width, alpha = "#ff8c00", 1.5, 0.75
+            ax_bev.plot(xs, ys, color=color, linewidth=width, alpha=alpha)
+            if instance_id in gt_ids:
+                ax_bev.text(xs[0], ys[0], "GT %s" % instance_id, color=color, fontsize=8)
     ego_at_critical = actor_xy(egos[critical])
     ax_bev.scatter(
         [ego_at_critical[0]], [ego_at_critical[1]], marker="*", s=120, color="#111111", zorder=5
@@ -273,6 +367,7 @@ def plot_scene(args):
         handles=[
             Line2D([0], [0], color="black", linewidth=3, label="ego"),
             Line2D([0], [0], color="#d62728", linewidth=2.5, label="GT risky actor"),
+            Line2D([0], [0], color="#ff8c00", linewidth=1.5, label="static obstacle"),
             Line2D([0], [0], marker="*", color="#111111", linestyle="", markersize=10, label="critical frame"),
         ],
         loc="best",

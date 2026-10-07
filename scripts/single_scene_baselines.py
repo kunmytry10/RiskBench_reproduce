@@ -2,18 +2,21 @@
 """Run lightweight RiskBench baselines on one stored scenario variant.
 
 This adapter reads the currently available RiskBench_Dataset layout
-(actors_data/ego_data/bbox.json). The upstream trajectory baseline scripts
-expect a different intermediate layout containing trajectory_frame/*.csv;
-we keep this conversion local to the reproduction repository and never
-write to the read-only dataset.
+(actors_data/ego_data/bbox.json). For obstacle scenarios it also consumes the
+official obstacle stream in actors_data, where static obstacles have a
+distance/type record but no ordinary actor location. The upstream trajectory
+baseline scripts expect a different intermediate layout containing
+trajectory_frame/*.csv; we keep this conversion local to the reproduction
+repository and never write to the read-only dataset.
 
 The output has two files:
   * scores.json: continuous distance/risk scores where available;
   * roi.json: official ROI-tool compatible boolean decisions.
 
 The Kalman implementation is deliberately marked exploratory: it uses a
-constant-velocity forecast from the stored actor state and is intended to
-validate the data/metric contract before porting the full upstream script.
+constant-velocity forecast from the stored actor state and treats static
+obstacles as stationary. It is intended to validate the data/metric contract
+before porting the full upstream rectangle-collision script.
 """
 
 from __future__ import print_function
@@ -60,6 +63,21 @@ def predict_position(entry, steps):
     )
 
 
+def candidate_distance(candidate, ego_xy):
+    if candidate["kind"] == "obstacle":
+        return float(candidate["state"].get("distance", 1e9))
+    return distance(xy(candidate["state"]), ego_xy)
+
+
+def find_actor_state(actor_state, instance_id):
+    for full_id, candidate in actor_state.items():
+        if not str(full_id).isdigit():
+            continue
+        if norm_id(full_id) == instance_id:
+            return candidate
+    return None
+
+
 def generate(args):
     scenario_root = os.path.join(args.data_root, args.data_type, args.basic)
     nested_root = os.path.join(
@@ -97,28 +115,46 @@ def generate(args):
         ego_state = egos_by_frame[frame]
         ego_xy = xy(ego_state)
         visible = []
+        seen_ids = set()
         for raw_id in bbox[key]:
+            if not str(raw_id).isdigit():
+                continue
             instance_id = norm_id(raw_id)
             if instance_id == ego_instance_id:
                 continue
-            state = None
-            for full_id, candidate in actor_state.items():
-                if not str(full_id).isdigit():
+            state = find_actor_state(actor_state, instance_id)
+            if state is not None and "location" in state:
+                visible.append(
+                    {"id": str(instance_id), "state": state, "kind": "actor"}
+                )
+                seen_ids.add(instance_id)
+
+        # Official RiskBench treats static obstacles as a separate detection
+        # stream. They are absent from ordinary bbox.json but are present in
+        # actors_data with a distance/type record.
+        if args.data_type == "obstacle":
+            for raw_id, state in actor_state.items():
+                if not str(raw_id).isdigit() or not isinstance(state, dict):
                     continue
-                if norm_id(full_id) == instance_id:
-                    state = candidate
-                    break
-            if state is not None:
-                visible.append((str(instance_id), state))
+                if state.get("type") != "obstacle":
+                    continue
+                instance_id = norm_id(raw_id)
+                if instance_id in seen_ids:
+                    continue
+                visible.append(
+                    {"id": str(instance_id), "state": state, "kind": "obstacle"}
+                )
 
         frame_scores = {}
         frame_roi = {}
         selected = None
         if args.method == "Random" and visible:
-            selected = rng.choice(visible)[0]
+            selected = rng.choice(visible)["id"]
 
-        for instance_id, state in visible:
-            current_distance = distance(xy(state), ego_xy)
+        for candidate in visible:
+            instance_id = candidate["id"]
+            state = candidate["state"]
+            current_distance = candidate_distance(candidate, ego_xy)
             if args.method == "Random":
                 score = 1.0 if instance_id == selected else 0.0
                 risky = instance_id == selected
@@ -130,12 +166,13 @@ def generate(args):
                 # local contract smoke test, not yet the full upstream
                 # rectangle-collision implementation.
                 min_distance = current_distance
-                for step in range(1, args.horizon + 1):
-                    actor_future = predict_position(state, step)
-                    ego_future = predict_position(ego_state, step)
-                    min_distance = min(
-                        min_distance, distance(actor_future, ego_future)
-                    )
+                if candidate["kind"] == "actor":
+                    for step in range(1, args.horizon + 1):
+                        actor_future = predict_position(state, step)
+                        ego_future = predict_position(ego_state, step)
+                        min_distance = min(
+                            min_distance, distance(actor_future, ego_future)
+                        )
                 score = max(0.0, 1.0 - min_distance / args.range_m)
                 risky = min_distance <= args.range_m
             else:

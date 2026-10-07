@@ -132,6 +132,10 @@ archives are read-only under `/data/dongzk/RiskBench`.
   of inventing a 2D box; such obstacle objects may also lack a world
   location in `actors_data`, so a trajectory cannot be plotted from the
   released fields.
+- Fixed the local obstacle contract on 2026-10-07 using the official data
+  conventions: class-21 front instance masks are converted to obstacle boxes,
+  `actor_attribute.json` supplies static obstacle BEV geometry, and obstacle
+  distance records are included in the Random/Range/Kalman smoke outputs.
 - Dataset inventory currently counts 7,218 scenario variants:
   interactive 1,865; collision 1,933; obstacle 1,430; non-interactive 1,990.
   Filtering basic scenario names by the official test prefixes (`10`, `A6`,
@@ -170,6 +174,13 @@ Representative figures for the three risk-bearing data types are under
 - `scene_10_i-1_1_c_f_f_1_rl_ClearSunset_low_.png` (interactive)
 - `scene_10_i-1_1_c_r_l_0_HardRainNoon_low_.png` (collision)
 - `scene_10_i-1_0_r_sl_ClearSunset_low_.png` (obstacle)
+
+The corrected obstacle figure and its source JSON are under
+`artifacts/visualization/risk_types_fixed/`. On the representative obstacle
+scene, the fixed local Range and local Kalman outputs both contain all four GT
+obstacle IDs at the critical interval; official ROI evaluation reports
+Recall 100.00% and F1 21.84% for this single-scene smoke test. This is a
+contract check, not a paper reproduction result.
 
 ## Batch execution checkpoint (2026-10-07)
 
