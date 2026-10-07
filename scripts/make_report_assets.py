@@ -143,6 +143,15 @@ def plot_scene(args):
     if critical not in frames:
         critical = frames[len(frames) // 2]
 
+    behavior_interval = None
+    behavior_path = os.path.join(args.metadata_root, "behavior", args.data_type + ".json")
+    if os.path.exists(behavior_path):
+        behavior = load_json(behavior_path)
+        if args.basic in behavior and args.variant in behavior[args.basic]:
+            behavior_interval = tuple(int(v) for v in behavior[args.basic][args.variant])
+    if args.data_type == "collision":
+        behavior_interval = (frames[0], frames[-1])
+
     score_data = {
         method: load_scores(args.score_root, method, args.data_type, scene_key)
         for method in METHODS
@@ -169,6 +178,9 @@ def plot_scene(args):
         fontsize=10,
     )
     frame_boxes = bbox[str(critical).zfill(8)]
+    frame_box_ids = {
+        norm_id(raw_id) for raw_id in frame_boxes if is_actor_id(raw_id)
+    }
     frame_roi = {
         method: roi_data[method].get(str(critical), {}) for method in METHODS
     }
@@ -176,6 +188,8 @@ def plot_scene(args):
         if not is_actor_id(raw_id):
             continue
         instance_id = norm_id(raw_id)
+        if instance_id == ego_id:
+            continue
         x1, y1, x2, y2 = [float(v) for v in box]
         if instance_id in gt_ids:
             edge = "#d62728"
@@ -197,7 +211,28 @@ def plot_scene(args):
         )
         if label:
             ax_front.text(x1, max(0, y1 - 4), "%s %s" % (label, instance_id), color=edge, fontsize=8)
+    missing_gt = sorted(gt_ids - frame_box_ids)
+    if missing_gt:
+        ax_front.text(
+            0.01,
+            0.03,
+            "GT IDs without front bbox at this frame: %s"
+            % ", ".join(missing_gt),
+            transform=ax_front.transAxes,
+            color="#b22222",
+            fontsize=8,
+            bbox=dict(facecolor="white", alpha=0.75, edgecolor="none"),
+        )
     ax_front.set_axis_off()
+
+    visible_ids = set()
+    for frame in frames:
+        for raw_id in bbox[str(frame).zfill(8)]:
+            if is_actor_id(raw_id):
+                instance_id = norm_id(raw_id)
+                if instance_id != ego_id:
+                    visible_ids.add(instance_id)
+    visible_ids.update(gt_ids)
 
     trajectories = {}
     for frame in frames:
@@ -207,6 +242,10 @@ def plot_scene(args):
             if not is_actor_id(raw_id) or not isinstance(state, dict) or "location" not in state:
                 continue
             instance_id = norm_id(raw_id)
+            if instance_id == ego_id or instance_id not in visible_ids:
+                continue
+            if state.get("type") not in ("vehicle", "pedestrian"):
+                continue
             trajectories.setdefault(instance_id, []).append(
                 (frame, actor_xy(state)[0], actor_xy(state)[1])
             )
@@ -253,6 +292,22 @@ def plot_scene(args):
     ax_score.set_ylabel("continuous score")
     ax_score.set_ylim(-0.03, 1.03)
     ax_score.grid(alpha=0.25)
+    if behavior_interval is not None:
+        ax_score.axvspan(
+            behavior_interval[0],
+            behavior_interval[1],
+            color="#d62728",
+            alpha=0.10,
+            label="GT positive interval",
+        )
+        ax_score.text(
+            behavior_interval[0],
+            0.94,
+            "GT interval [%d, %d]" % behavior_interval,
+            color="#b22222",
+            fontsize=8,
+            va="top",
+        )
     ax_score.legend(ncol=4, fontsize=8, loc="upper right")
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -269,6 +324,7 @@ def plot_scene(args):
         "frame_start": frames[0],
         "frame_end": frames[-1],
         "critical_frame": critical,
+        "gt_positive_interval": list(behavior_interval) if behavior_interval else None,
         "gt_risk_ids": sorted(gt_ids),
         "ego_id": ego_id,
         "methods": {},

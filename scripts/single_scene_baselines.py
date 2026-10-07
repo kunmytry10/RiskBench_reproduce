@@ -160,7 +160,7 @@ def run(args):
     with open(os.path.join(output_dir, "%s.json" % args.data_type), "w") as handle:
         json.dump({scenario_key: roi}, handle, indent=2, sort_keys=True)
     print("method=%s scenario=%s frames=%d output=%s" %
-          (args.method, scenario_key, len(frames), output_dir))
+          (args.method, scenario_key, len(scores), output_dir))
 
 
 def parse_args():

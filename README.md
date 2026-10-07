@@ -117,6 +117,21 @@ archives are read-only under `/data/dongzk/RiskBench`.
   bird's-eye actor/ego trajectories, and the maximum per-frame score curves
   from the three local smoke adapters. The frame-37 GT is red; it does not
   indicate a model prediction.
+- The report visualizer excludes the ego bounding box from candidate-object
+  overlays and restricts gray BEV tracks to visible vehicles/pedestrians.
+  Traffic lights and unrelated background actors are not treated as traffic
+  participants in the revised figures.
+- For interactive/obstacle data, the official confusion-matrix ground truth
+  is the listed GT risk actor during the metadata behavior interval; the
+  critical-point metadata is a single reference frame used by PIC/consistency,
+  not the only positive frame. Collision evaluation uses the full recorded
+  frame range. The risk-type figures show the interval as a shaded band and
+  the critical point as a dashed line.
+- Obstacle metadata can contain GT actor IDs that have no front-camera bbox
+  at the selected critical frame. The report marks this explicitly instead
+  of inventing a 2D box; such obstacle objects may also lack a world
+  location in `actors_data`, so a trajectory cannot be plotted from the
+  released fields.
 - Dataset inventory currently counts 7,218 scenario variants:
   interactive 1,865; collision 1,933; obstacle 1,430; non-interactive 1,990.
   Filtering basic scenario names by the official test prefixes (`10`, `A6`,
@@ -148,6 +163,13 @@ Key outputs are `scene_10_i-1_1_c_f_f_1_rl_ClearSunset_low_.png`,
 `official_prediction_reference_interactive_f1.png`. The matching scene
 summary is JSON; the full dataset inventory and official prediction reference
 table are CSV/JSON so the figures can be regenerated and audited.
+
+Representative figures for the three risk-bearing data types are under
+`artifacts/visualization/risk_types/`:
+
+- `scene_10_i-1_1_c_f_f_1_rl_ClearSunset_low_.png` (interactive)
+- `scene_10_i-1_1_c_r_l_0_HardRainNoon_low_.png` (collision)
+- `scene_10_i-1_0_r_sl_ClearSunset_low_.png` (obstacle)
 
 ## Batch execution checkpoint (2026-10-07)
 
