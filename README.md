@@ -113,14 +113,13 @@ archives are read-only under `/data/dongzk/RiskBench`.
 - The representative interactive scenario is
   `10_i-1_1_c_f_f_1_rl/ClearSunset_low_`: 84 frames, GT risky actor `32284`,
   GT critical frame 37, and ego instance ID `32176`.
-- The scene figure combines the RGB front view with the GT-risk bounding box,
-  bird's-eye actor/ego trajectories, and the maximum per-frame score curves
-  from the three local smoke adapters. The frame-37 GT is red; it does not
-  indicate a model prediction.
-- The report visualizer excludes the ego bounding box from candidate-object
-  overlays and restricts gray BEV tracks to visible vehicles/pedestrians.
-  Traffic lights and unrelated background actors are not treated as traffic
-  participants in the revised figures.
+- The scene figure combines the RGB front view with only the GT-risk
+  bounding box, the ego/GT bird's-eye trajectories, and the GT-object score
+  curves from the three local smoke adapters. The frame-37 GT is red; it does
+  not indicate a model prediction.
+- The report visualizer intentionally omits non-GT gray tracks and ordinary
+  candidate boxes so the figure remains readable for presentations. Traffic
+  lights and unrelated background actors are not shown.
 - For interactive/obstacle data, the official confusion-matrix ground truth
   is the listed GT risk actor during the metadata behavior interval; the
   critical-point metadata is a single reference frame used by PIC/consistency,
@@ -156,27 +155,26 @@ Rebuild the report assets from the workspace root:
 conda run -n riskbench python scripts/make_report_assets.py \
   --data-root /data/dongzk/RiskBench/RiskBench_Dataset \
   --metadata-root /data/dongzk/RiskBench/RiskBench_Dataset/metadata \
-  --score-root artifacts/single_scene/roi \
-  --roi-root artifacts/single_scene/roi \
+  --score-root artifacts/risk_type_scenes/roi \
+  --roi-root artifacts/risk_type_scenes/roi \
   --official-metrics-root artifacts/metrics/official_recomputed \
   --output-dir artifacts/visualization
 ```
 
-Key outputs are `scene_10_i-1_1_c_f_f_1_rl_ClearSunset_low_.png`,
-`dataset_split_counts.png`, and
+Key scene outputs are under `artifacts/visualization/scenes/`; the other
+report outputs are `dataset_split_counts.png` and
 `official_prediction_reference_interactive_f1.png`. The matching scene
 summary is JSON; the full dataset inventory and official prediction reference
 table are CSV/JSON so the figures can be regenerated and audited.
 
-Representative figures for the three risk-bearing data types are under
-`artifacts/visualization/risk_types/`:
+The final three representative figures are under
+`artifacts/visualization/scenes/`:
 
 - `scene_10_i-1_1_c_f_f_1_rl_ClearSunset_low_.png` (interactive)
 - `scene_10_i-1_1_c_r_l_0_HardRainNoon_low_.png` (collision)
 - `scene_10_i-1_0_r_sl_ClearSunset_low_.png` (obstacle)
 
-The corrected obstacle figure and its source JSON are under
-`artifacts/visualization/risk_types_fixed/`. On the representative obstacle
+The obstacle figure uses the official instance-segmentation/geometry path. On the representative obstacle
 scene, the fixed local Range and local Kalman outputs both contain all four GT
 obstacle IDs at the critical interval; official ROI evaluation reports
 Recall 100.00% and F1 21.84% for this single-scene smoke test. This is a

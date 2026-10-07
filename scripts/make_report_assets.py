@@ -251,19 +251,12 @@ def plot_scene(args):
         instance_id = norm_id(raw_id)
         if instance_id == ego_id:
             continue
+        if instance_id not in gt_ids:
+            continue
         x1, y1, x2, y2 = [float(v) for v in box]
-        if instance_id in gt_ids:
-            edge = "#d62728"
-            linewidth = 3.0
-            label = "GT"
-        elif args.data_type == "obstacle" and instance_id in obstacle_shapes:
-            edge = "#ff8c00"
-            linewidth = 2.0
-            label = "obstacle"
-        else:
-            edge = "#bdbdbd"
-            linewidth = 1.0
-            label = None
+        edge = "#d62728"
+        linewidth = 3.0
+        label = "GT"
         ax_front.add_patch(
             Rectangle(
                 (x1, y1),
@@ -290,15 +283,6 @@ def plot_scene(args):
         )
     ax_front.set_axis_off()
 
-    visible_ids = set()
-    for frame in frames:
-        for raw_id in bbox[str(frame).zfill(8)]:
-            if is_actor_id(raw_id):
-                instance_id = norm_id(raw_id)
-                if instance_id != ego_id:
-                    visible_ids.add(instance_id)
-    visible_ids.update(gt_ids)
-
     trajectories = {}
     for frame in frames:
         ego_xy = actor_xy(egos[frame])
@@ -307,7 +291,7 @@ def plot_scene(args):
             if not is_actor_id(raw_id) or not isinstance(state, dict) or "location" not in state:
                 continue
             instance_id = norm_id(raw_id)
-            if instance_id == ego_id or instance_id not in visible_ids:
+            if instance_id == ego_id or instance_id not in gt_ids:
                 continue
             if state.get("type") not in ("vehicle", "pedestrian"):
                 continue
@@ -320,45 +304,54 @@ def plot_scene(args):
         ys = [item[2] for item in points]
         if instance_id == ego_id:
             ax_bev.plot(xs, ys, color="black", linewidth=3, label="ego")
-        elif instance_id in gt_ids:
+        else:
             ax_bev.plot(xs, ys, color="#d62728", linewidth=2.5)
             ax_bev.scatter(xs[-1], ys[-1], color="#d62728", s=20)
-        else:
-            ax_bev.plot(xs, ys, color="#bdbdbd", linewidth=0.7, alpha=0.6)
     if args.data_type == "obstacle":
-        critical_ego = actor_xy(egos[critical])
-        active_obstacles = {
-            norm_id(raw_id)
-            for raw_id, state in actors[critical].items()
-            if is_actor_id(raw_id)
-            and isinstance(state, dict)
-            and state.get("type") == "obstacle"
-        }
         for instance_id, shape in obstacle_shapes.items():
-            if instance_id not in active_obstacles and instance_id not in gt_ids:
+            if instance_id not in gt_ids:
                 continue
             points = shape["points"]
             xs = [point[0] for point in points]
             ys = [point[1] for point in points]
-            center = (
-                sum(point[0] for point in points[:-1]) / 4.0,
-                sum(point[1] for point in points[:-1]) / 4.0,
-            )
-            near_ego = distance(center, critical_ego) <= 60.0
-            if instance_id not in gt_ids and not near_ego:
+            ax_bev.fill(xs, ys, color="#d62728", alpha=0.18, linewidth=0)
+            ax_bev.plot(xs, ys, color="#d62728", linewidth=1.5, alpha=0.9)
+
+        gt_centers = []
+        for instance_id in sorted(gt_ids):
+            if instance_id not in obstacle_shapes:
                 continue
-            if instance_id in gt_ids:
-                color, width, alpha = "#d62728", 2.5, 0.95
-            else:
-                color, width, alpha = "#ff8c00", 1.5, 0.75
-            ax_bev.plot(xs, ys, color=color, linewidth=width, alpha=alpha)
-            if instance_id in gt_ids:
-                ax_bev.text(xs[0], ys[0], "GT %s" % instance_id, color=color, fontsize=8)
+            points = obstacle_shapes[instance_id]["points"][:-1]
+            gt_centers.append(
+                (
+                    sum(point[0] for point in points) / len(points),
+                    sum(point[1] for point in points) / len(points),
+                )
+            )
+        if gt_centers:
+            center_x = sum(point[0] for point in gt_centers) / len(gt_centers)
+            center_y = sum(point[1] for point in gt_centers) / len(gt_centers)
+            ax_bev.scatter(
+                [point[0] for point in gt_centers],
+                [point[1] for point in gt_centers],
+                color="#d62728",
+                s=24,
+                zorder=5,
+            )
+            ax_bev.text(
+                center_x,
+                center_y + 2.5,
+                "GT obstacles (%d)" % len(gt_centers),
+                color="#d62728",
+                fontsize=8,
+                ha="center",
+                bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
+            )
     ego_at_critical = actor_xy(egos[critical])
     ax_bev.scatter(
         [ego_at_critical[0]], [ego_at_critical[1]], marker="*", s=120, color="#111111", zorder=5
     )
-    ax_bev.set_title("BEV trajectories (red = GT risky actor, star = ego at critical frame)", fontsize=10)
+    ax_bev.set_title("BEV trajectories (red = GT risk object(s), star = ego at critical frame)", fontsize=10)
     ax_bev.set_xlabel("world x (m)")
     ax_bev.set_ylabel("world y (m)")
     ax_bev.grid(alpha=0.25)
@@ -366,8 +359,7 @@ def plot_scene(args):
     ax_bev.legend(
         handles=[
             Line2D([0], [0], color="black", linewidth=3, label="ego"),
-            Line2D([0], [0], color="#d62728", linewidth=2.5, label="GT risky actor"),
-            Line2D([0], [0], color="#ff8c00", linewidth=1.5, label="static obstacle"),
+            Line2D([0], [0], color="#d62728", linewidth=2.5, label="GT risk object(s)"),
             Line2D([0], [0], marker="*", color="#111111", linestyle="", markersize=10, label="critical frame"),
         ],
         loc="best",
@@ -378,11 +370,16 @@ def plot_scene(args):
         values = []
         for frame in frames:
             frame_scores = score_data[method].get(str(frame), {})
-            values.append(max([float(v) for v in frame_scores.values()] or [0.0]))
+            target_scores = [
+                float(frame_scores[instance_id])
+                for instance_id in gt_ids
+                if instance_id in frame_scores
+            ]
+            values.append(max(target_scores or [0.0]))
         ax_score.plot(frames, values, color=COLORS[method], linewidth=2, label=method)
     if critical is not None:
         ax_score.axvline(critical, color="#d62728", linestyle="--", linewidth=1.5, label="GT critical point")
-    ax_score.set_title("Maximum predicted actor risk score by frame", fontsize=10)
+    ax_score.set_title("GT risk-object score by frame", fontsize=10)
     ax_score.set_xlabel("frame")
     ax_score.set_ylabel("continuous score")
     ax_score.set_ylim(-0.03, 1.03)
@@ -405,8 +402,9 @@ def plot_scene(args):
         )
     ax_score.legend(ncol=4, fontsize=8, loc="upper right")
 
-    os.makedirs(args.output_dir, exist_ok=True)
-    out_png = os.path.join(args.output_dir, "scene_%s.png" % scene_key)
+    scene_output_dir = os.path.join(args.output_dir, "scenes")
+    os.makedirs(scene_output_dir, exist_ok=True)
+    out_png = os.path.join(scene_output_dir, "scene_%s.png" % scene_key)
     fig.savefig(out_png, dpi=180)
     plt.close(fig)
 
@@ -437,7 +435,7 @@ def plot_scene(args):
                 [float(v) for frame_dict in score_data[method].values() for v in frame_dict.values()] or [0.0]
             ),
         }
-    with open(os.path.join(args.output_dir, "scene_%s.json" % scene_key), "w") as handle:
+    with open(os.path.join(scene_output_dir, "scene_%s.json" % scene_key), "w") as handle:
         json.dump(summary, handle, indent=2, sort_keys=True)
     return out_png, summary
 
@@ -587,14 +585,19 @@ def parse_args():
     parser.add_argument("--basic", default="10_i-1_1_c_f_f_1_rl")
     parser.add_argument("--variant", default="ClearSunset_low_")
     parser.add_argument("--skip-dataset-summary", action="store_true")
+    parser.add_argument(
+        "--scene-only",
+        action="store_true",
+        help="write only the requested scene PNG/JSON; skip other report figures",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     out_png, scene_summary = plot_scene(args)
-    dataset = None if args.skip_dataset_summary else dataset_summary(args)
-    official = official_reference_summary(args)
+    dataset = None if args.skip_dataset_summary or args.scene_only else dataset_summary(args)
+    official = None if args.scene_only else official_reference_summary(args)
     print(
         json.dumps(
             {
