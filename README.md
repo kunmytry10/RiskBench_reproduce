@@ -81,15 +81,9 @@ archives are read-only under `/data/dongzk/RiskBench`.
   `artifacts/dataset_view/`, a symlink-based view with the extra archive
   nesting removed and generated `tracking.npy` files. It does not copy raw
   images or modify `/data/dongzk/RiskBench`.
-- Added `scripts/single_scene_baselines.py`. On
-  `10_i-1_1_c_f_f_1_rl/ClearSunset_low_`, it reads the released
-  `actors_data`, `ego_data`, and `bbox.json`, preserves continuous scores,
-  and writes official ROI-tool-compatible boolean JSON.
-- Random, Range, and the local constant-velocity Kalman adapter each ran for
-  all 84 frames of that variant. Official ROI evaluation completed:
-  Random F1 11.76%, Range F1 0.00%, and Kalman adapter F1 27.27%.
-  These are data-contract smoke results, not paper reproduction numbers:
-  the Kalman adapter still needs the upstream rectangle-collision logic.
+- An earlier single-scene adapter was used only to validate the data contract.
+  Its code and outputs are archived under `archive/legacy_scripts/` and
+  `artifacts/archive/legacy_smoke_20261007/`; they are not official results.
 - The official ROI evaluator also recomputed all available prediction JSON
   files under `artifacts/model_official/model`; the raw log is
   `artifacts/metrics/official_recomputed.log` and JSON summaries are under
@@ -115,8 +109,7 @@ archives are read-only under `/data/dongzk/RiskBench`.
   GT critical frame 37, and ego instance ID `32176`.
 - The scene figure combines the RGB front view with only the GT-risk
   bounding box, the ego/GT bird's-eye trajectories, and the GT-object score
-  curves from the three local smoke adapters. The frame-37 GT is red; it does
-  not indicate a model prediction.
+  curves. The frame-37 GT is red; it does not indicate a model prediction.
 - The report visualizer intentionally omits non-GT gray tracks and ordinary
   candidate boxes so the figure remains readable for presentations. Traffic
   lights and unrelated background actors are not shown.
@@ -131,18 +124,14 @@ archives are read-only under `/data/dongzk/RiskBench`.
   of inventing a 2D box; such obstacle objects may also lack a world
   location in `actors_data`, so a trajectory cannot be plotted from the
   released fields.
-- Fixed the local obstacle contract on 2026-10-07 using the official data
-  conventions: class-21 front instance masks are converted to obstacle boxes,
-  `actor_attribute.json` supplies static obstacle BEV geometry, and obstacle
-  distance records are included in the Random/Range/Kalman smoke outputs.
+- The obstacle visualization follows the official data conventions:
+  class-21 front instance masks are converted to obstacle boxes and
+  `actor_attribute.json` supplies static obstacle BEV geometry.
 - Dataset inventory currently counts 7,218 scenario variants:
   interactive 1,865; collision 1,933; obstacle 1,430; non-interactive 1,990.
   Filtering basic scenario names by the official test prefixes (`10`, `A6`,
   `B3`) yields 1,634 variants: 515 interactive, 420 collision, 305 obstacle,
   394 non-interactive. The script also records per-variant frame counts.
-- The single-scene smoke metrics are produced by our lightweight adapters and
-  official ROI evaluator, but they are not paper reproduction results. The
-  Kalman adapter is not yet the official rectangle-collision implementation.
 - `artifacts/metrics/official_recomputed/` contains official-evaluator metrics
   on author-provided prediction JSON. The generated
   `official_prediction_reference_interactive_f1.png` and
@@ -155,16 +144,11 @@ Rebuild the report assets from the workspace root:
 conda run -n riskbench python scripts/make_report_assets.py \
   --data-root /data/dongzk/RiskBench/RiskBench_Dataset \
   --metadata-root /data/dongzk/RiskBench/RiskBench_Dataset/metadata \
-  --score-root artifacts/risk_type_scenes/roi \
-  --roi-root artifacts/risk_type_scenes/roi \
+  --score-root artifacts/official_offline_test \
+  --roi-root artifacts/official_offline_test \
   --official-metrics-root artifacts/metrics/official_recomputed \
   --output-dir artifacts/visualization
 ```
-
-For the representative obstacle scene, use the corrected obstacle outputs
-instead: replace both `--score-root` and `--roi-root` with
-`artifacts/obstacle_fix/roi`. The interactive and collision figures use
-`artifacts/risk_type_scenes/roi`.
 
 Key scene outputs are under `artifacts/visualization/scenes/`; the other
 report outputs are `dataset_split_counts.png` and
@@ -179,26 +163,7 @@ The final three representative figures are under
 - `scene_10_i-1_1_c_r_l_0_HardRainNoon_low_.png` (collision)
 - `scene_10_i-1_0_r_sl_ClearSunset_low_.png` (obstacle)
 
-The obstacle figure uses the official instance-segmentation/geometry path. On the representative obstacle
-scene, the fixed local Range and local Kalman outputs both contain all four GT
-obstacle IDs at the critical interval; official ROI evaluation reports
-Recall 100.00% and F1 21.84% for this single-scene smoke test. This is a
-contract check, not a paper reproduction result.
-
-## Batch execution checkpoint (2026-10-07)
-
-- Added `scripts/run_lightweight_test_split.py`. It scans only basic scenarios
-  beginning with `10`, `A6`, or `B3`, combines per-scene outputs into the
-  official `model_root/<method>/<data_type>.json` contract, and writes a
-  `batch_manifest.json` with every scene/method status and runtime.
-- A four-scene smoke run (one scene from each data type) completed all 12
-  adapter jobs with zero errors. The merged Random, Range, and Kalman files
-  were each accepted by the official ROI evaluator; the interactive metrics
-  were F1 11.76%, 0.00%, and 27.27%, respectively.
-- The batch script currently covers only the lightweight adapters. It does not
-  claim learned-model inference, and the local Kalman path remains an
-  exploratory constant-velocity adapter until the upstream rectangle-collision
-  implementation is ported.
+The obstacle figure uses the official instance-segmentation/geometry path.
 
 ## Official-rule offline port checkpoint (2026-10-07)
 
@@ -224,22 +189,54 @@ contract check, not a paper reproduction result.
   evaluator evaluates the metadata universe, so missing scenes are counted as
   negative predictions.
 
-Smoke command:
+The current official-rule entry point is:
 
 ```bash
-conda run -n riskbench python scripts/run_lightweight_test_split.py \
-  --data-root /data/dongzk/RiskBench/RiskBench_Dataset \
-  --output-root artifacts/batch_smoke \
-  --limit-per-type 1
+bash run_baseline.sh Random
+bash run_baseline.sh Range
+bash run_baseline.sh "Kalman filter"
 ```
 
-Full test-prefix command:
+Use `--resume` after an interruption. The data and output roots can be
+overridden with `RISKBENCH_DATA_ROOT` and `RISKBENCH_OUTPUT_ROOT`; worker count
+can be changed with `RISKBENCH_WORKERS`.
+
+The corresponding full metrics command is:
 
 ```bash
-conda run -n riskbench python scripts/run_lightweight_test_split.py \
-  --data-root /data/dongzk/RiskBench/RiskBench_Dataset \
-  --output-root artifacts/batch_lightweight_test
+bash evaluate_baseline.sh Random
+bash evaluate_baseline.sh Range
+bash evaluate_baseline.sh "Kalman filter"
+conda run -n riskbench python scripts/summarize_official_metrics.py
 ```
+
+The active outputs are:
+
+- `artifacts/official_offline_test/`: per-scene official-rule predictions;
+- `artifacts/official_offline_metrics/`: official ROI metrics and summaries;
+- `artifacts/visualization/scenes/`: the three presentation figures.
+
+The earlier smoke runs and exploratory adapters are retained only under
+`artifacts/archive/legacy_smoke_20261007/` and `archive/legacy_scripts/`; they are not
+part of the official baseline commands.
+
+## Full official-rule results (2026-10-07)
+
+The official-rule offline batch completed all 4,902 jobs without errors:
+1,634 test scenes × 3 methods. The current archive contains 515 interactive,
+420 collision, 305 obstacle, and 394 non-interactive scenes.
+
+| Method | All-scenario precision | All-scenario recall | All-scenario F1 |
+|---|---:|---:|---:|
+| Random | 13.99% | 14.22% | 14.10% |
+| Range | 51.73% | 61.42% | 56.16% |
+| Kalman filter | 49.01% | 18.68% | 27.05% |
+
+These are reproducible offline results using the official evaluator and
+official-rule port. They are not claimed to exactly equal the paper table:
+the current archive split differs slightly from the paper's reported counts,
+and the original planning-aware CARLA random state is unavailable. The
+per-data-type table is in `artifacts/official_offline_metrics/summary.md`.
 
 ## Reproduction plan
 

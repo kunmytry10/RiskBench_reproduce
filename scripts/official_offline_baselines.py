@@ -26,6 +26,7 @@ import sys
 
 import numpy as np
 import pandas as pd
+import cv2
 from PIL import Image
 
 
@@ -37,7 +38,24 @@ OFFICIAL_ROOT = os.path.join(
 )
 if OFFICIAL_ROOT not in sys.path:
     sys.path.insert(0, OFFICIAL_ROOT)
-from models.KalmanFilter import kf_inference  # noqa: E402
+from models.KalmanFilter import KalmanFilter, kf_inference  # noqa: E402
+
+
+def reset_official_kalman_state():
+    """Mirror a fresh official data_generator.py process per scenario.
+
+    The upstream KalmanFilter stores ``cv2.KalmanFilter`` as a class variable,
+    so a batch worker would otherwise carry its state from one scenario into
+    the next, unlike the official shell runner (one Python process/scenario).
+    """
+    KalmanFilter.kf = cv2.KalmanFilter(4, 2)
+    KalmanFilter.kf.measurementMatrix = np.array(
+        [[1, 0, 0, 0], [0, 1, 0, 0]], np.float32
+    )
+    KalmanFilter.kf.transitionMatrix = np.array(
+        [[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0], [0, 0, 0, 1]],
+        np.float32,
+    )
 
 
 def load_json(path):
@@ -258,6 +276,8 @@ def official_kalman(
 
 
 def generate(args):
+    if args.method == "Kalman filter":
+        reset_official_kalman_state()
     (
         variant_path, attrs, actor_ids, bbox, actors, egos, frames,
         trajectories, ego_id,
