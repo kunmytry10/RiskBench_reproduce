@@ -10,6 +10,7 @@ pipelines and are tracked separately in artifacts/method_status.md.
 from __future__ import print_function
 
 import argparse
+import concurrent.futures
 import json
 import os
 import time
@@ -50,6 +51,56 @@ def write_json(path, value):
         json.dump(value, handle, indent=2, sort_keys=True)
 
 
+def run_scene(job):
+    """Run one scene in a worker process and return serializable results."""
+    args, data_type, basic, variant, method = job
+    run_args = argparse.Namespace(
+        data_root=args.data_root,
+        data_type=data_type,
+        basic=basic,
+        variant=variant,
+        method=method,
+        output_root=args.output_root,
+        seed=args.seed,
+        range_m=args.range_m,
+        horizon=args.horizon,
+    )
+    started = time.time()
+    scene_key, scores, roi = generate(run_args)
+    return {
+        "data_type": data_type,
+        "basic": basic,
+        "variant": variant,
+        "method": method,
+        "scene_key": scene_key,
+        "scores": scores,
+        "roi": roi,
+        "seconds": round(time.time() - started, 3),
+    }
+
+
+def load_existing(output_root, methods):
+    """Load existing merged files so a rerun can safely resume."""
+    combined = {method: {data_type: {} for data_type in DATA_TYPES}
+                for method in methods}
+    for method in methods:
+        for data_type in DATA_TYPES:
+            path = os.path.join(output_root, method, data_type + ".json")
+            if os.path.exists(path):
+                with open(path) as handle:
+                    combined[method][data_type] = json.load(handle)
+    return combined
+
+
+def checkpoint(output_root, combined, methods):
+    for method in methods:
+        for data_type in DATA_TYPES:
+            write_json(
+                os.path.join(output_root, method, data_type + ".json"),
+                combined[method][data_type],
+            )
+
+
 def main(args):
     selected = []
     for data_type in DATA_TYPES:
@@ -58,82 +109,88 @@ def main(args):
             scenes = scenes[: args.limit_per_type]
         selected.extend((data_type, basic, variant) for basic, variant in scenes)
 
+    methods = [args.method] if args.method else METHODS
+    combined = load_existing(args.output_root, methods) if args.resume else {
+        method: {data_type: {} for data_type in DATA_TYPES} for method in methods
+    }
+    existing_keys = {
+        (method, data_type, scene_key)
+        for method in methods
+        for data_type in DATA_TYPES
+        for scene_key in combined[method][data_type]
+    }
+    jobs = [
+        (args, data_type, basic, variant, method)
+        for data_type, basic, variant in selected
+        for method in methods
+        if not args.resume or
+        (method, data_type, "%s_%s" % (basic, variant)) not in existing_keys
+    ]
+
     manifest = {
         "data_root": os.path.abspath(args.data_root),
         "output_root": os.path.abspath(args.output_root),
         "test_prefixes": list(TEST_PREFIXES),
-        "methods": METHODS,
+        "methods": methods,
         "selected_scene_count": len(selected),
         "selected_by_type": {
             data_type: sum(1 for item in selected if item[0] == data_type)
             for data_type in DATA_TYPES
         },
+        "pending_job_count": len(jobs),
+        "workers": args.workers,
+        "resume": bool(args.resume),
         "started_at_unix": time.time(),
         "records": [],
     }
 
-    combined = {
-        method: {data_type: {} for data_type in DATA_TYPES} for method in METHODS
-    }
-    for index, (data_type, basic, variant) in enumerate(selected, 1):
-        for method in METHODS:
-            run_args = argparse.Namespace(
-                data_root=args.data_root,
-                data_type=data_type,
-                basic=basic,
-                variant=variant,
-                method=method,
-                output_root=args.output_root,
-                seed=args.seed,
-                range_m=args.range_m,
-                horizon=args.horizon,
+    completed = 0
+    if args.workers > 1 and len(jobs) > 1:
+        executor = concurrent.futures.ProcessPoolExecutor(max_workers=args.workers)
+        results = executor.map(run_scene, jobs)
+    else:
+        executor = None
+        results = (run_scene(job) for job in jobs)
+    try:
+        for job, result in zip(jobs, results):
+            data_type = result["data_type"]
+            method = result["method"]
+            scene_key = result["scene_key"]
+            scores = result["scores"]
+            combined[method][data_type][scene_key] = result["roi"]
+            score_key = "%s_%s_scores" % (data_type, result["basic"])
+            score_path = os.path.join(args.output_root, method, score_key + ".json")
+            existing_scores = {}
+            if os.path.exists(score_path):
+                with open(score_path) as handle:
+                    existing_scores = json.load(handle)
+            existing_scores[scene_key] = scores
+            write_json(score_path, existing_scores)
+            manifest["records"].append(
+                {
+                    "data_type": data_type,
+                    "basic": result["basic"],
+                    "variant": result["variant"],
+                    "method": method,
+                    "status": "ok",
+                    "frames": len(scores),
+                    "seconds": result["seconds"],
+                }
             )
-            started = time.time()
-            try:
-                scene_key, scores, roi = generate(run_args)
-                combined[method][data_type][scene_key] = roi
-                score_key = "%s_%s_scores" % (data_type, basic)
-                score_path = os.path.join(args.output_root, method, score_key + ".json")
-                # Keep a per-scene score file for auditability; the merged ROI
-                # evaluator consumes only the boolean file below.
-                existing_scores = {}
-                if os.path.exists(score_path):
-                    with open(score_path) as handle:
-                        existing_scores = json.load(handle)
-                existing_scores[scene_key] = scores
-                write_json(score_path, existing_scores)
-                manifest["records"].append(
-                    {
-                        "data_type": data_type,
-                        "basic": basic,
-                        "variant": variant,
-                        "method": method,
-                        "status": "ok",
-                        "frames": len(scores),
-                        "seconds": round(time.time() - started, 3),
-                    }
-                )
-            except Exception as exc:
-                manifest["records"].append(
-                    {
-                        "data_type": data_type,
-                        "basic": basic,
-                        "variant": variant,
-                        "method": method,
-                        "status": "error",
-                        "error": repr(exc),
-                        "seconds": round(time.time() - started, 3),
-                    }
-                )
-        if index % 10 == 0 or index == len(selected):
-            print("completed scenes %d/%d" % (index, len(selected)))
+            completed += 1
+            if completed % args.checkpoint_every == 0:
+                checkpoint(args.output_root, combined, methods)
+            if completed % 10 == 0 or completed == len(jobs):
+                print("completed jobs %d/%d" % (completed, len(jobs)), flush=True)
+    except Exception as exc:
+        # Preserve completed work before propagating the failure.
+        checkpoint(args.output_root, combined, methods)
+        raise
+    finally:
+        if executor is not None:
+            executor.shutdown()
 
-    for method in METHODS:
-        for data_type in DATA_TYPES:
-            write_json(
-                os.path.join(args.output_root, method, data_type + ".json"),
-                combined[method][data_type],
-            )
+    checkpoint(args.output_root, combined, methods)
     manifest["finished_at_unix"] = time.time()
     manifest["ok_records"] = sum(
         record["status"] == "ok" for record in manifest["records"]
@@ -155,6 +212,13 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--range-m", type=float, default=10.0)
     parser.add_argument("--horizon", type=int, default=30)
+    parser.add_argument(
+        "--method", choices=METHODS,
+        help="run only one method; useful for parallel independent jobs",
+    )
+    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--checkpoint-every", type=int, default=20)
+    parser.add_argument("--resume", action="store_true")
     return parser.parse_args()
 
 
