@@ -21,7 +21,7 @@ def data_type_root(data_root, data_type):
     return nested if os.path.isdir(nested) else os.path.join(data_root, data_type)
 
 
-def list_scenes(data_root, data_type):
+def list_scenes(data_root, data_type, allowed_scene_keys=None):
     root = data_type_root(data_root, data_type)
     scenes = []
     for basic in sorted(os.listdir(root)):
@@ -32,7 +32,9 @@ def list_scenes(data_root, data_type):
             continue
         for variant in sorted(os.listdir(variants)):
             if os.path.isdir(os.path.join(variants, variant)):
-                scenes.append((basic, variant))
+                scene_key = "%s_%s" % (basic, variant)
+                if allowed_scene_keys is None or scene_key in allowed_scene_keys:
+                    scenes.append((basic, variant))
     return scenes
 
 
@@ -60,6 +62,7 @@ def run_scene(job):
         method=method,
         output_root=args.output_root,
         seed=scene_seed(args.seed, data_type, basic, variant),
+        range_m=args.range_m,
     )
     started = time.time()
     scene_key, scores, roi = generate(local)
@@ -100,9 +103,16 @@ def checkpoint(output_root, combined, methods):
 
 def main(args):
     methods = [args.method] if args.method else METHODS
+    scene_manifest = None
+    if args.scene_manifest:
+        with open(args.scene_manifest) as handle:
+            scene_manifest = json.load(handle)
     selected = []
     for data_type in DATA_TYPES:
-        scenes = list_scenes(args.data_root, data_type)
+        allowed = None
+        if scene_manifest is not None:
+            allowed = set(scene_manifest.get(data_type, []))
+        scenes = list_scenes(args.data_root, data_type, allowed)
         if args.limit_per_type:
             scenes = scenes[:args.limit_per_type]
         selected.extend((data_type, basic, variant) for basic, variant in scenes)
@@ -130,6 +140,7 @@ def main(args):
         "data_root": os.path.abspath(args.data_root),
         "output_root": os.path.abspath(args.output_root),
         "test_prefixes": list(TEST_PREFIXES),
+        "scene_manifest": os.path.abspath(args.scene_manifest) if args.scene_manifest else None,
         "methods": methods,
         "selected_scene_count": len(selected),
         "selected_by_type": {
@@ -207,8 +218,10 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--output-root", required=True)
+    parser.add_argument("--scene-manifest")
     parser.add_argument("--limit-per-type", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--range-m", type=float, default=10.0)
     parser.add_argument("--method", choices=METHODS)
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--checkpoint-every", type=int, default=20)

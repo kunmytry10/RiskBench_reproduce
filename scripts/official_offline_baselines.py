@@ -105,9 +105,12 @@ def obstacle_segmentation_ids(variant_path, frame):
         return set()
     semantic = image[:, :, 0].astype(np.int64)
     instances = image[:, :, 1].astype(np.int64) + 256 * image[:, :, 2].astype(np.int64)
+    obstacle_instances = instances[semantic == 21]
+    ids, areas = np.unique(obstacle_instances, return_counts=True)
     return {
         norm_id(value)
-        for value in np.unique(instances[semantic == 21])
+        for value, area in zip(ids, areas)
+        if area >= 400
     }
 
 
@@ -183,6 +186,22 @@ def build_scene(args):
                 float(velocity.get("y", 0.0)),
                 float(state.get("rotation", {}).get("yaw", 0.0)),
             ])
+        # Static props are not present as actor records in actors_data. The
+        # official CARLA collector appends them to df_list on every frame.
+        for raw_id, state in attrs.get("obstacle", {}).items():
+            location = state.get("location", {})
+            if "x" not in location or "y" not in location:
+                continue
+            rows.append([
+                frame,
+                int(raw_id),
+                state.get("type_id", "static.prop.trafficcone01"),
+                float(location["x"]),
+                float(location["y"]),
+                0.0,
+                0.0,
+                float(state.get("rotation", {}).get("yaw", 0.0)),
+            ])
     trajectories = pd.DataFrame(
         rows,
         columns=["FRAME", "TRACK_ID", "OBJECT_TYPE", "X", "Y",
@@ -191,7 +210,18 @@ def build_scene(args):
     return variant_path, attrs, ids, bbox, actors, egos, frames, trajectories, ego_id
 
 
-def official_random(actor_state, ego_id, rng):
+def static_obstacle_distance(obstacle, ego_state):
+    location = obstacle.get("location", {})
+    ego_location = ego_state.get("location", {})
+    if not all(key in location and key in ego_location for key in ("x", "y", "z")):
+        return None
+    dx = float(location["x"]) - float(ego_location["x"])
+    dy = float(location["y"]) - float(ego_location["y"])
+    dz = float(location["z"]) - float(ego_location["z"])
+    return float(np.sqrt(dx * dx + dy * dy + dz * dz))
+
+
+def official_random(actor_state, attrs, ego_id, ego_state, rng):
     """Match collect_actor_data()'s all_ids construction."""
     candidates = []
     for raw_id, state in actor_state.items():
@@ -207,11 +237,18 @@ def official_random(actor_state, ego_id, rng):
             continue
         if float(state["distance"]) < 35.0:
             candidates.append(value)
+    obstacles = actor_state.get("obstacle_ids", [])
+    for raw_id in obstacles:
+        state = attrs.get("obstacle", {}).get(str(raw_id), {})
+        distance = static_obstacle_distance(state, ego_state)
+        if distance is not None and distance < 35.0:
+            candidates.append(int(raw_id))
     return norm_id(rng.choice(candidates)) if candidates else None
 
 
 def official_range(
-    actor_state, actor_ids, bbox_frame, obstacle_ids_frame, ego_id
+    actor_state, attrs, ego_state, actor_ids, bbox_frame,
+    obstacle_ids_frame, ego_id, range_m
 ):
     """Match the exact nearest-object rule in data_generator.py."""
     visible_ids = visible_object_ids(bbox_frame, ego_id) | set(obstacle_ids_frame)
@@ -221,11 +258,13 @@ def official_range(
     best_id = None
 
     for raw_id in actor_ids["obstacles"]:
-        raw_key, state = actor_state_by_id(actor_state, raw_id)
+        state = attrs.get("obstacle", {}).get(str(raw_id))
         if norm_id(raw_id) in visible_ids and state is not None:
-            distance = float(state["distance"])
+            distance = static_obstacle_distance(state, ego_state)
+            if distance is None:
+                continue
             if distance < best_distance:
-                best_distance, best_id = distance, raw_key
+                best_distance, best_id = distance, int(raw_id)
 
     for group in ("vehicles", "pedestrians"):
         for raw_id in actor_ids[group]:
@@ -237,7 +276,7 @@ def official_range(
                 if distance < best_distance:
                     best_distance, best_id = distance, raw_key
 
-    return norm_id(best_id) if best_id is not None and best_distance <= 10.0 else None
+    return norm_id(best_id) if best_id is not None and best_distance <= range_m else None
 
 
 def official_kalman(
@@ -263,7 +302,10 @@ def official_kalman(
             vehicle_list.append(remain)
     if not vehicle_list:
         return None
-    obstacle_ids = [str(value) for value in actor_ids["obstacles"]]
+    # The upstream data_generator passes this list as integer CARLA IDs.
+    # Preserve that exact type; KalmanFilter.py itself performs the string
+    # comparison in its obstacle branch.
+    obstacle_ids = list(actor_ids["obstacles"])
     result = kf_inference(
         vehicle_list,
         int(frame),
@@ -286,12 +328,18 @@ def generate(args):
     roi = {}
     scores = {}
     for frame in frames:
+        obstacle_ids = (
+            obstacle_segmentation_ids(variant_path, frame)
+            if args.data_type == "obstacle" else set()
+        )
         if args.method == "Random":
-            selected = official_random(actors[frame], ego_id, rng)
+            selected = official_random(
+                actors[frame], attrs, ego_id, egos[frame], rng
+            )
         elif args.method == "Range":
             selected = official_range(
-                actors[frame], actor_ids, bbox["%08d" % frame],
-                obstacle_segmentation_ids(variant_path, frame), ego_id,
+                actors[frame], attrs, egos[frame], actor_ids,
+                bbox["%08d" % frame], obstacle_ids, ego_id, args.range_m,
             )
         elif args.method == "Kalman filter":
             selected = official_kalman(trajectories, frame, actor_ids, ego_id)
@@ -299,7 +347,7 @@ def generate(args):
             raise ValueError(args.method)
         # The official planning code reports a single risky ID (or none).
         ids = set(visible_object_ids(bbox["%08d" % frame], ego_id))
-        ids.update(obstacle_segmentation_ids(variant_path, frame))
+        ids.update(obstacle_ids)
         roi[str(frame)] = {
             str(instance_id): bool(instance_id == selected)
             for instance_id in sorted(ids)
@@ -332,6 +380,7 @@ def parse_args():
     parser.add_argument("--method", required=True, choices=METHODS)
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--range-m", type=float, default=10.0)
     return parser.parse_args()
 
 

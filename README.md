@@ -165,10 +165,10 @@ The final three representative figures are under
 
 The obstacle figure uses the official instance-segmentation/geometry path.
 
-## Official-rule offline port checkpoint (2026-10-07)
+## Official-rule offline port checkpoint (2026-10-08)
 
-- The first full-prefix run was stopped because it used the earlier local
-  smoke adapter and was not a valid paper reproduction.
+- The earlier local smoke adapter has been removed. It was only a data-contract
+  probe and was never used for reported metrics.
 - `scripts/official_offline_baselines.py` now reconstructs the archived
   per-frame inputs and applies the official Random/Range rules. Its Kalman
   path calls the upstream `models/KalmanFilter.py::kf_inference` directly,
@@ -213,33 +213,40 @@ bash evaluate_baseline.sh "Kalman filter"
 conda run -n riskbench python scripts/summarize_official_metrics.py
 ```
 
-The active outputs are:
+The active outputs for the Table II test-scene manifest are:
 
-- `artifacts/official_offline_test/`: per-scene official-rule predictions;
-- `artifacts/official_offline_metrics/`: official ROI metrics and summaries;
+- `artifacts/official_table_ii_repro_<method>/`: per-scene predictions;
+- `artifacts/official_table_ii_metrics_<method>/`: official ROI metrics;
 - `artifacts/visualization/scenes/`: the three presentation figures.
 
-The earlier smoke runs and exploratory adapters are retained only under
-`artifacts/archive/legacy_smoke_20261007/` and `archive/legacy_scripts/`; they are not
-part of the official baseline commands.
+The archived smoke outputs under `artifacts/archive/` are historical only and
+are not part of the baseline commands.
 
-## Full official-rule results (2026-10-07)
+## Full official-rule results (2026-10-08)
 
-The official-rule offline batch completed all 4,902 jobs without errors:
-1,634 test scenes × 3 methods. The current archive contains 515 interactive,
-420 collision, 305 obstacle, and 394 non-interactive scenes.
+The reproducible Table II manifest contains 1,632 scenes (515 interactive,
+420 collision, 303 obstacle, and 394 non-interactive), selected from the common
+scene keys in the three author-provided prediction files. All three methods
+completed with zero worker errors; the official ROI evaluator was run for each
+method and summarized from the four data-type confusion matrices.
 
 | Method | All-scenario precision | All-scenario recall | All-scenario F1 |
 |---|---:|---:|---:|
-| Random | 13.99% | 14.22% | 14.10% |
-| Range | 51.73% | 61.42% | 56.16% |
-| Kalman filter | 49.01% | 18.68% | 27.05% |
+| Random | 14.36% | 14.81% | 14.58% |
+| Range | 51.71% | 61.39% | 56.14% |
+| Kalman filter | 48.63% | 19.18% | 27.51% |
 
-These are reproducible offline results using the official evaluator and
-official-rule port. They are not claimed to exactly equal the paper table:
-the current archive split differs slightly from the paper's reported counts,
-and the original planning-aware CARLA random state is unavailable. The
-per-data-type table is in `artifacts/official_offline_metrics/summary.md`.
+Results are not claimed to exactly equal the paper:
+the released archive split differs from the paper counts, the published CARLA
+random state is unavailable, and offline reconstruction can differ from the
+original live CARLA stream. Any remaining discrepancy is recorded rather than
+hidden by threshold tuning.
+
+The row-by-row paper comparison, including metric deltas, is in
+[`reports/table_ii_comparison.md`](reports/table_ii_comparison.md).
+
+The RiskWorld/Table 1 audit and Range (5m) rerun are documented in
+[`reports/riskworld_and_baseline_audit.md`](reports/riskworld_and_baseline_audit.md).
 
 ## Reproduction plan
 
